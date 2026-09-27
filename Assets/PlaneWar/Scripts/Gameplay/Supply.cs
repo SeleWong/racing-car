@@ -43,7 +43,9 @@ namespace PlaneWar
             _baseX = x;
             _stopY = WorldBounds.Top - WorldBounds.Height * 0.3f;
             transform.position = new Vector3(x, WorldBounds.Top + size.y * 0.5f, 0f);
-            gameObject.name = "Supply_" + kind;
+#if UNITY_EDITOR
+            gameObject.name = kind == SupplyKind.Bomb ? "Supply_Bomb" : "Supply_DoubleBullet";
+#endif
         }
 
         public bool Tick(float dt)

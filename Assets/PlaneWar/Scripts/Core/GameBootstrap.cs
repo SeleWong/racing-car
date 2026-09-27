@@ -27,8 +27,12 @@ namespace PlaneWar
             if (Object.FindObjectOfType<GameManager>() != null) return;
             var cfg = GameConfig.Load();
             if (!cfg.autoBootstrap) return;
+            // 先禁用再挂组件，把已加载的配置传进去，避免 Awake 中重复创建默认配置
             var go = new GameObject("PlaneWar");
-            go.AddComponent<GameManager>();
+            go.SetActive(false);
+            var gm = go.AddComponent<GameManager>();
+            gm.config = cfg;
+            go.SetActive(true);
         }
     }
 }

@@ -65,15 +65,79 @@ namespace PlaneWar
             Pixels[idx] = o;
         }
 
+        // 扫描线复用缓冲（仅启动期在主线程使用）
+        private static float[] _intersections = new float[32];
+        private static float[] _rowCoverage = new float[0];
+
+        /// <summary>
+        /// 扫描线多边形填充（奇偶规则，2x2 超采样）。结果与逐像素点测试完全一致，
+        /// 但复杂度从 O(像素×边) 降为 O(行×边 + 覆盖像素)，大幅缩短启动生成时间。
+        /// </summary>
         public void Polygon(Vector2[] pts, Color color)
         {
-            float minX = 1f, minY = 1f, maxX = 0f, maxY = 0f;
-            for (int i = 0; i < pts.Length; i++)
+            int n = pts.Length;
+            if (n < 3) return;
+            if (_rowCoverage.Length < Width) _rowCoverage = new float[Width];
+            if (_intersections.Length < n) _intersections = new float[n * 2];
+
+            float minY = float.MaxValue, maxY = float.MinValue;
+            for (int i = 0; i < n; i++)
             {
-                minX = Mathf.Min(minX, pts[i].x); maxX = Mathf.Max(maxX, pts[i].x);
-                minY = Mathf.Min(minY, pts[i].y); maxY = Mathf.Max(maxY, pts[i].y);
+                float y = pts[i].y * Height;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
             }
-            Fill((x, y) => PointInPolygon(pts, x, y), color, minX, minY, maxX, maxY);
+            int y0 = Mathf.Max(0, Mathf.FloorToInt(minY));
+            int y1 = Mathf.Min(Height - 1, Mathf.CeilToInt(maxY));
+
+            for (int py = y0; py <= y1; py++)
+            {
+                int rowMin = Width, rowMax = -1;
+                for (int s = 0; s < 2; s++)
+                {
+                    float sy = py + (s == 0 ? 0.25f : 0.75f);
+                    int count = 0;
+                    for (int i = 0, j = n - 1; i < n; j = i++)
+                    {
+                        float ay = pts[i].y * Height, by = pts[j].y * Height;
+                        if ((ay > sy) == (by > sy)) continue;
+                        float ax = pts[i].x * Width, bx = pts[j].x * Width;
+                        _intersections[count++] = ax + (sy - ay) * (bx - ax) / (by - ay);
+                    }
+                    // 插入排序（交点数很少）
+                    for (int a = 1; a < count; a++)
+                    {
+                        float v = _intersections[a];
+                        int b = a - 1;
+                        while (b >= 0 && _intersections[b] > v) { _intersections[b + 1] = _intersections[b]; b--; }
+                        _intersections[b + 1] = v;
+                    }
+                    for (int k = 0; k + 1 < count; k += 2)
+                    {
+                        float xa = _intersections[k], xb = _intersections[k + 1];
+                        for (int t = 0; t < 2; t++)
+                        {
+                            float sx = t == 0 ? 0.25f : 0.75f;
+                            // 采样点 px+sx 在 [xa, xb) 内
+                            int pa = Mathf.Max(0, Mathf.CeilToInt(xa - sx));
+                            int pb = Mathf.Min(Width, Mathf.CeilToInt(xb - sx));
+                            for (int px = pa; px < pb; px++)
+                            {
+                                // 不变式：[rowMin,rowMax] 之外的覆盖值恒为 0（每行结束时清零）
+                                if (px < rowMin) rowMin = px;
+                                if (px > rowMax) rowMax = px;
+                                _rowCoverage[px] += 0.25f;
+                            }
+                        }
+                    }
+                }
+                for (int px = rowMin; px <= rowMax; px++)
+                {
+                    float cov = _rowCoverage[px];
+                    if (cov > 0f) Blend(px, py, color, Mathf.Min(1f, cov));
+                    _rowCoverage[px] = 0f;
+                }
+            }
         }
 
         /// <summary>对称多边形：只给出右半边轮廓点（从上到下、x ≥ 0.5），自动镜像左半边。</summary>
@@ -134,6 +198,16 @@ namespace PlaneWar
                 c.Pixels[i] = o;
             }
             return c;
+        }
+
+        /// <summary>生成可读纹理（用于打包图集，打包后即销毁）。</summary>
+        public Texture2D ToReadableTexture(string name)
+        {
+            var tex = new Texture2D(Width, Height, TextureFormat.RGBA32, false);
+            tex.name = name;
+            tex.SetPixels(Pixels);
+            tex.Apply(false, false);
+            return tex;
         }
 
         public Texture2D ToTexture(string name, FilterMode filter = FilterMode.Bilinear, TextureWrapMode wrap = TextureWrapMode.Clamp)

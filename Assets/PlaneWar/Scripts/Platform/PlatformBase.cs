@@ -8,6 +8,11 @@ namespace PlaneWar
     {
         public virtual string Name { get { return "Default"; } }
 
+        public event Action Hidden;
+        protected void RaiseHidden() { if (Hidden != null) Hidden(); }
+
+        public virtual int PreferredFrameRate(int configured) { return configured; }
+
         public virtual void Init(Action onReady) { if (onReady != null) onReady(); }
 
         public virtual void SaveInt(string key, int value)
@@ -75,5 +80,8 @@ namespace PlaneWar
     public class WebGLPlatform : PlatformBase
     {
         public override string Name { get { return "WebGL"; } }
+
+        // 浏览器中设置 targetFrameRate 会改用 setTimeout 驱动，反而不如 requestAnimationFrame 平滑
+        public override int PreferredFrameRate(int configured) { return -1; }
     }
 }

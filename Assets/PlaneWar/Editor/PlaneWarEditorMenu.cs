@@ -26,6 +26,7 @@ namespace PlaneWarEditor
                 if (EditorBuildSettings.scenes.Length > 0) return;
                 if (!File.Exists(ScenePath)) CreateMainScene(false);
                 ApplyPortraitSettings();
+                ApplyPerformanceSettings();
             };
         }
 
@@ -97,6 +98,22 @@ namespace PlaneWarEditor
             if (string.IsNullOrEmpty(PlayerSettings.productName) || PlayerSettings.productName == "racing-car")
                 PlayerSettings.productName = "飞机大战";
             Debug.Log("[PlaneWar] 已应用竖屏设置（Android / iOS / WebGL / PC 窗口 540x960）");
+        }
+
+        [MenuItem("PlaneWar/应用性能推荐设置（增量 GC 等）", priority = 21)]
+        public static void ApplyPerformanceSettings()
+        {
+#if UNITY_2019_1_OR_NEWER
+            // 增量 GC：把一次长 GC 拆到多帧执行，消除 GC 尖峰卡顿（WebGL 不支持，会自动忽略）
+            PlayerSettings.gcIncremental = true;
+#endif
+            // 移动端多线程渲染，降低主线程耗时
+            PlayerSettings.MTRendering = true;
+#if UNITY_2019_3_OR_NEWER
+            // Android 帧节奏优化（Swappy），帧间隔更均匀
+            PlayerSettings.Android.optimizedFramePacing = true;
+#endif
+            Debug.Log("[PlaneWar] 已应用性能推荐设置：增量 GC / 多线程渲染 / Android 帧节奏优化");
         }
 
         [MenuItem("PlaneWar/微信小游戏：添加 WEIXINMINIGAME 宏 (WebGL)", priority = 40)]

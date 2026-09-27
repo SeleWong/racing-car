@@ -17,6 +17,14 @@ namespace PlaneWar
         private AudioClip _clipShoot, _clipSmall, _clipMedium, _clipLarge, _clipLargeAppear,
             _clipDouble, _clipBomb, _clipUseBomb, _clipGameOver, _clipButton;
 
+        // 运行时合成的 AudioClip 属于原生资源，必须手动销毁
+        private readonly System.Collections.Generic.List<AudioClip> _synthesized = new System.Collections.Generic.List<AudioClip>(12);
+        private float _lastShootTime = -10f;
+        // 同一音效同一帧/极短时间内只播放一次，防止炸弹清屏时叠加几十个声部
+        private AudioClip _lastClip;
+        private float _lastClipTime = -10f;
+        private const float SameClipMinInterval = 0.05f;
+
         public bool Muted
         {
             get { return _muted; }
@@ -42,17 +50,18 @@ namespace PlaneWar
             _shoot.playOnAwake = false;
             _shoot.volume = 0.18f;
 
-            _clipShoot = cfg.sfxShoot != null ? cfg.sfxShoot : SfxSynth.Shoot();
-            _clipSmall = cfg.sfxEnemyDownSmall != null ? cfg.sfxEnemyDownSmall : SfxSynth.Explosion(0.25f, 0.5f, 1);
-            _clipMedium = cfg.sfxEnemyDownMedium != null ? cfg.sfxEnemyDownMedium : SfxSynth.Explosion(0.4f, 0.35f, 2);
-            _clipLarge = cfg.sfxEnemyDownLarge != null ? cfg.sfxEnemyDownLarge : SfxSynth.Explosion(0.8f, 0.2f, 3);
-            _clipLargeAppear = cfg.sfxLargeAppear != null ? cfg.sfxLargeAppear : SfxSynth.Siren();
-            _clipDouble = cfg.sfxGetDoubleBullet != null ? cfg.sfxGetDoubleBullet : SfxSynth.Arpeggio(new[] { 523f, 659f, 784f, 1047f });
-            _clipBomb = cfg.sfxGetBomb != null ? cfg.sfxGetBomb : SfxSynth.Arpeggio(new[] { 392f, 523f, 659f });
-            _clipUseBomb = cfg.sfxUseBomb != null ? cfg.sfxUseBomb : SfxSynth.Explosion(1.0f, 0.12f, 4);
-            _clipGameOver = cfg.sfxGameOver != null ? cfg.sfxGameOver : SfxSynth.Arpeggio(new[] { 523f, 392f, 330f, 262f }, 0.16f);
-            _clipButton = cfg.sfxButton != null ? cfg.sfxButton : SfxSynth.Click();
+            _clipShoot = Pick(cfg.sfxShoot, SfxSynth.Shoot);
+            _clipSmall = Pick(cfg.sfxEnemyDownSmall, () => SfxSynth.Explosion(0.25f, 0.5f, 1));
+            _clipMedium = Pick(cfg.sfxEnemyDownMedium, () => SfxSynth.Explosion(0.4f, 0.35f, 2));
+            _clipLarge = Pick(cfg.sfxEnemyDownLarge, () => SfxSynth.Explosion(0.8f, 0.2f, 3));
+            _clipLargeAppear = Pick(cfg.sfxLargeAppear, SfxSynth.Siren);
+            _clipDouble = Pick(cfg.sfxGetDoubleBullet, () => SfxSynth.Arpeggio(new[] { 523f, 659f, 784f, 1047f }));
+            _clipBomb = Pick(cfg.sfxGetBomb, () => SfxSynth.Arpeggio(new[] { 392f, 523f, 659f }));
+            _clipUseBomb = Pick(cfg.sfxUseBomb, () => SfxSynth.Explosion(1.0f, 0.12f, 4));
+            _clipGameOver = Pick(cfg.sfxGameOver, () => SfxSynth.Arpeggio(new[] { 523f, 392f, 330f, 262f }, 0.16f));
+            _clipButton = Pick(cfg.sfxButton, SfxSynth.Click);
 
+            _shoot.clip = _clipShoot;
             if (cfg.bgm != null) _bgm.clip = cfg.bgm;
 
             GameEvents.StateChanged += OnStateChanged;
@@ -63,8 +72,20 @@ namespace PlaneWar
             GameEvents.BombUsed += OnBombUsed;
         }
 
+        private AudioClip Pick(AudioClip configured, System.Func<AudioClip> synth)
+        {
+            if (configured != null) return configured;
+            var clip = synth();
+            if (clip != null) _synthesized.Add(clip);
+            return clip;
+        }
+
         private void OnDestroy()
         {
+            for (int i = 0; i < _synthesized.Count; i++)
+                if (_synthesized[i] != null) Destroy(_synthesized[i]);
+            _synthesized.Clear();
+
             GameEvents.StateChanged -= OnStateChanged;
             GameEvents.PlayerFired -= OnFired;
             GameEvents.EnemyKilled -= OnEnemyKilled;
@@ -78,6 +99,10 @@ namespace PlaneWar
         private void Play(AudioClip clip, float volume = 1f)
         {
             if (clip == null || _muted) return;
+            float now = Time.unscaledTime;
+            if (clip == _lastClip && now - _lastClipTime < SameClipMinInterval) return;
+            _lastClip = clip;
+            _lastClipTime = now;
             _sfx.PlayOneShot(clip, volume);
         }
 
@@ -96,7 +121,12 @@ namespace PlaneWar
         private void OnFired()
         {
             if (_muted || _clipShoot == null) return;
-            _shoot.PlayOneShot(_clipShoot);
+            float now = Time.unscaledTime;
+            if (now - _lastShootTime < _cfg.shootSfxMinInterval) return;
+            _lastShootTime = now;
+            // 单声部重播：射击音效永远只占 1 个 voice，不会随射速堆积
+            _shoot.Stop();
+            _shoot.Play();
         }
 
         private void OnEnemyKilled(EnemyKind kind, bool byBomb)

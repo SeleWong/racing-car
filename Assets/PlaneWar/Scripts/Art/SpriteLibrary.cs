@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace PlaneWar
@@ -21,64 +22,191 @@ namespace PlaneWar
 
         private static readonly Color Outline = C(40, 52, 70);
 
+        /// <summary>运行时创建的纹理 / Sprite，必须在销毁时释放，否则会造成原生内存泄漏。</summary>
+        private readonly List<Object> _owned = new List<Object>();
+        private bool _disposed;
+
+        /// <summary>图集纹理（调试 / 性能面板用）。</summary>
+        public Texture2D Atlas { get; private set; }
+
+        private struct Pending
+        {
+            public string Name;
+            public PixelCanvas Canvas;
+            public float WorldWidth;
+            public Vector4 Border;
+            public System.Action<Sprite> Assign;
+        }
+
         public static SpriteLibrary Build(GameConfig cfg)
         {
             var lib = new SpriteLibrary();
+            var pending = new List<Pending>(32);
 
-            lib.Player1 = cfg.playerSprite != null ? cfg.playerSprite : DrawPlayer(true).ToSprite("hero1", cfg.playerSize.x);
-            lib.Player2 = cfg.playerSprite2 != null ? cfg.playerSprite2
-                        : cfg.playerSprite != null ? cfg.playerSprite : DrawPlayer(false).ToSprite("hero2", cfg.playerSize.x);
-
-            lib.Bullet = cfg.bulletSprite != null ? cfg.bulletSprite : DrawBullet(false).ToSprite("bullet1", cfg.bulletSize.x);
-            lib.DoubleBullet = cfg.doubleBulletSprite != null ? cfg.doubleBulletSprite : DrawBullet(true).ToSprite("bullet2", cfg.bulletSize.x);
-
-            lib.BulletSupply = cfg.bulletSupplySprite != null ? cfg.bulletSupplySprite : DrawSupply(false).ToSprite("bullet_supply", cfg.supplySize.x);
-            lib.BombSupply = cfg.bombSupplySprite != null ? cfg.bombSupplySprite : DrawSupply(true).ToSprite("bomb_supply", cfg.supplySize.x);
-            lib.BombIcon = cfg.bombIconSprite != null ? cfg.bombIconSprite : DrawBombIcon().ToSprite("bomb", 1f);
-
-            lib.Background = cfg.backgroundSprite != null ? cfg.backgroundSprite : DrawBackground();
-
-            for (int i = 0; i < 3; i++)
+            // —— 玩家（尾焰两帧）
+            if (cfg.playerSprite != null)
             {
-                var ec = cfg.GetEnemy((EnemyKind)i);
-                PixelCanvas canvas = null;
-                if (ec.sprite == null)
-                {
-                    canvas = DrawEnemy((EnemyKind)i);
-                    lib.Enemy[i] = canvas.TintedCopy(Color.white, 0f).ToSprite("enemy" + (i + 1), ec.size.x);
-                }
-                else lib.Enemy[i] = ec.sprite;
-
-                if (ec.hitSprite != null) lib.EnemyHit[i] = ec.hitSprite;
-                else if (canvas != null) lib.EnemyHit[i] = canvas.TintedCopy(Color.white, 0.55f).ToSprite("enemy" + (i + 1) + "_hit", ec.size.x);
-                else lib.EnemyHit[i] = lib.Enemy[i];
+                lib.Player1 = cfg.playerSprite;
+                lib.Player2 = cfg.playerSprite2 != null ? cfg.playerSprite2 : cfg.playerSprite;
+            }
+            else
+            {
+                Add(pending, "hero1", DrawPlayer(true), cfg.playerSize.x, s => lib.Player1 = s);
+                if (cfg.playerSprite2 != null) lib.Player2 = cfg.playerSprite2;
+                else Add(pending, "hero2", DrawPlayer(false), cfg.playerSize.x, s => lib.Player2 = s);
             }
 
-            lib.Explosion = DrawExplosionFrames(6);
+            // —— 子弹
+            if (cfg.bulletSprite != null) lib.Bullet = cfg.bulletSprite;
+            else Add(pending, "bullet1", DrawBullet(false), cfg.bulletSize.x, s => lib.Bullet = s);
+            if (cfg.doubleBulletSprite != null) lib.DoubleBullet = cfg.doubleBulletSprite;
+            else Add(pending, "bullet2", DrawBullet(true), cfg.bulletSize.x, s => lib.DoubleBullet = s);
 
-            // UI 资源
-            var white = new PixelCanvas(4, 4);
+            // —— 补给 / 炸弹
+            if (cfg.bulletSupplySprite != null) lib.BulletSupply = cfg.bulletSupplySprite;
+            else Add(pending, "bullet_supply", DrawSupply(false), cfg.supplySize.x, s => lib.BulletSupply = s);
+            if (cfg.bombSupplySprite != null) lib.BombSupply = cfg.bombSupplySprite;
+            else Add(pending, "bomb_supply", DrawSupply(true), cfg.supplySize.x, s => lib.BombSupply = s);
+            if (cfg.bombIconSprite != null) lib.BombIcon = cfg.bombIconSprite;
+            else Add(pending, "bomb", DrawBombIcon(), 1f, s => lib.BombIcon = s);
+
+            // —— 敌机 + 受击帧
+            for (int i = 0; i < 3; i++)
+            {
+                int idx = i;
+                var ec = cfg.GetEnemy((EnemyKind)i);
+                if (ec.sprite != null)
+                {
+                    lib.Enemy[idx] = ec.sprite;
+                    lib.EnemyHit[idx] = ec.hitSprite != null ? ec.hitSprite : ec.sprite;
+                    continue;
+                }
+                var canvas = DrawEnemy((EnemyKind)i);
+                Add(pending, "enemy" + (i + 1), canvas, ec.size.x, s => lib.Enemy[idx] = s);
+                if (ec.hitSprite != null) lib.EnemyHit[idx] = ec.hitSprite;
+                else Add(pending, "enemy" + (i + 1) + "_hit", canvas.TintedCopy(Color.white, 0.55f), ec.size.x, s => lib.EnemyHit[idx] = s);
+            }
+
+            // —— 爆炸帧
+            var frames = DrawExplosionFrames(6);
+            lib.Explosion = new Sprite[frames.Length];
+            for (int i = 0; i < frames.Length; i++)
+            {
+                int idx = i;
+                Add(pending, "explosion_" + i, frames[i], 1f, s => lib.Explosion[idx] = s);
+            }
+
+            // —— UI
+            var white = new PixelCanvas(8, 8);
             white.Rect(0, 0, 1, 1, Color.white);
-            lib.White = white.ToSprite("ui_white", 1f);
+            Add(pending, "ui_white", white, 1f, s => lib.White = s, new Vector4(3, 3, 3, 3));
 
             var rr = new PixelCanvas(64, 64);
             rr.RoundRect(0.0f, 0.0f, 1f, 1f, 0.35f, Color.white);
-            lib.RoundRect = rr.ToSprite("ui_roundrect", 1f, new Vector4(24, 24, 24, 24));
+            Add(pending, "ui_roundrect", rr, 1f, s => lib.RoundRect = s, new Vector4(24, 24, 24, 24));
 
             var circle = new PixelCanvas(64, 64);
             circle.Ellipse(0.5f, 0.5f, 0.48f, 0.48f, Color.white);
-            lib.Circle = circle.ToSprite("ui_circle", 1f);
+            Add(pending, "ui_circle", circle, 1f, s => lib.Circle = s);
 
             var pause = new PixelCanvas(64, 64);
             pause.RoundRect(0.26f, 0.2f, 0.42f, 0.8f, 0.05f, Color.white);
             pause.RoundRect(0.58f, 0.2f, 0.74f, 0.8f, 0.05f, Color.white);
-            lib.PauseIcon = pause.ToSprite("ui_pause", 1f);
+            Add(pending, "ui_pause", pause, 1f, s => lib.PauseIcon = s);
 
             var play = new PixelCanvas(64, 64);
             play.Polygon(new[] { new Vector2(0.3f, 0.18f), new Vector2(0.82f, 0.5f), new Vector2(0.3f, 0.82f) }, Color.white);
-            lib.PlayIcon = play.ToSprite("ui_play", 1f);
+            Add(pending, "ui_play", play, 1f, s => lib.PlayIcon = s);
+
+            lib.PackAtlas(pending);
+
+            // 背景需要 Repeat 平铺，单独一张纹理
+            if (cfg.backgroundSprite != null) lib.Background = cfg.backgroundSprite;
+            else lib.Background = lib.DrawBackground();
 
             return lib;
+        }
+
+        private static void Add(List<Pending> list, string name, PixelCanvas canvas, float worldWidth,
+            System.Action<Sprite> assign, Vector4 border = default(Vector4))
+        {
+            list.Add(new Pending { Name = name, Canvas = canvas, WorldWidth = worldWidth, Border = border, Assign = assign });
+        }
+
+        /// <summary>
+        /// 把所有程序生成的图打进一张图集：同材质同纹理的 SpriteRenderer / UI 可以合批，
+        /// Draw Call 从十几个降到个位数；图集上传后释放 CPU 端内存。
+        /// </summary>
+        private void PackAtlas(List<Pending> pending)
+        {
+            if (pending.Count == 0) return;
+            var sources = new Texture2D[pending.Count];
+            for (int i = 0; i < pending.Count; i++) sources[i] = pending[i].Canvas.ToReadableTexture(pending[i].Name);
+
+            var atlas = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+            atlas.name = "PlaneWarAtlas";
+            Rect[] uvs = null;
+            try
+            {
+                uvs = atlas.PackTextures(sources, 2, 2048, true);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[PlaneWar] 图集打包失败，改用独立纹理: " + e.Message);
+            }
+
+            if (uvs != null && uvs.Length == pending.Count)
+            {
+                atlas.filterMode = FilterMode.Bilinear;
+                atlas.wrapMode = TextureWrapMode.Clamp;
+                Atlas = atlas;
+                _owned.Add(atlas);
+                for (int i = 0; i < pending.Count; i++)
+                {
+                    var p = pending[i];
+                    Rect uv = uvs[i];
+                    var r = new Rect(Mathf.Round(uv.x * atlas.width), Mathf.Round(uv.y * atlas.height),
+                        Mathf.Round(uv.width * atlas.width), Mathf.Round(uv.height * atlas.height));
+                    // 超出最大尺寸时 PackTextures 会整体缩小，按实际尺寸换算 ppu 与九宫格边距
+                    float scale = r.width / p.Canvas.Width;
+                    var sp = Sprite.Create(atlas, r, new Vector2(0.5f, 0.5f), r.width / Mathf.Max(0.0001f, p.WorldWidth),
+                        0, SpriteMeshType.FullRect, p.Border * scale);
+                    sp.name = p.Name;
+                    _owned.Add(sp);
+                    p.Assign(sp);
+                }
+            }
+            else
+            {
+                DestroyObject(atlas);
+                for (int i = 0; i < pending.Count; i++)
+                {
+                    var p = pending[i];
+                    var sp = p.Canvas.ToSprite(p.Name, p.WorldWidth, p.Border);
+                    _owned.Add(sp.texture);
+                    _owned.Add(sp);
+                    p.Assign(sp);
+                }
+            }
+
+            for (int i = 0; i < sources.Length; i++) DestroyObject(sources[i]);
+        }
+
+        /// <summary>释放所有运行时生成的纹理与 Sprite。GameManager 销毁时调用。</summary>
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            for (int i = 0; i < _owned.Count; i++) DestroyObject(_owned[i]);
+            _owned.Clear();
+            Atlas = null;
+        }
+
+        private static void DestroyObject(Object o)
+        {
+            if (o == null) return;
+            if (Application.isPlaying) Object.Destroy(o);
+            else Object.DestroyImmediate(o);
         }
 
         public Sprite GetEnemy(EnemyKind k) { return Enemy[(int)k]; }
@@ -262,9 +390,9 @@ namespace PlaneWar
             return c;
         }
 
-        private static Sprite[] DrawExplosionFrames(int count)
+        private static PixelCanvas[] DrawExplosionFrames(int count)
         {
-            var frames = new Sprite[count];
+            var frames = new PixelCanvas[count];
             var rnd = new System.Random(1234);
             // 固定的火球碎片方向，保证各帧连贯
             int blobs = 9;
@@ -297,12 +425,12 @@ namespace PlaneWar
                     c.Ellipse(0.44f, 0.56f, r * 0.5f, r * 0.45f, C(90, 90, 95, 0.5f * alpha));
                     c.Ellipse(0.58f, 0.45f, r * 0.4f, r * 0.4f, C(90, 90, 95, 0.45f * alpha));
                 }
-                frames[f] = c.ToSprite("explosion_" + f, 1f);
+                frames[f] = c;
             }
             return frames;
         }
 
-        private static Sprite DrawBackground()
+        private Sprite DrawBackground()
         {
             // 原版风格：浅灰蓝底 + 淡淡的格纹，可无缝平铺
             const int size = 256;
@@ -321,6 +449,8 @@ namespace PlaneWar
             var tex = c.ToTexture("background", FilterMode.Bilinear, TextureWrapMode.Repeat);
             var sp = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size / 4.5f, 0, SpriteMeshType.FullRect);
             sp.name = "background";
+            _owned.Add(tex);
+            _owned.Add(sp);
             return sp;
         }
     }

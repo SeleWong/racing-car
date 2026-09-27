@@ -153,6 +153,16 @@ namespace PlaneWar
         public string rewardedAdUnitId = "";
         public string shareTitle = "我在飞机大战中得了 {0} 分，快来挑战我！";
 
+        [Header("性能 / 内存上限（防止异常情况下无限增长）")]
+        [Tooltip("同屏子弹上限；超过时本次不再发射")]
+        public int maxActiveBullets = 120;
+        [Tooltip("同屏爆炸特效上限；超过时跳过特效（不影响逻辑）")]
+        public int maxActiveExplosions = 24;
+        [Tooltip("射击音效最短间隔（秒）。WebGL / 小游戏每次播放都会创建音频节点，适当调大可降低开销")]
+        public float shootSfxMinInterval = 0.15f;
+        [Tooltip("显示 FPS / 内存 / GC 次数面板（也可在游戏中按 F1 切换）")]
+        public bool showPerfStats = false;
+
         [Header("可选美术替换（留空使用程序生成）")]
         public Sprite playerSprite;
         public Sprite playerSprite2;
@@ -188,6 +198,9 @@ namespace PlaneWar
             }
         }
 
+        /// <summary>是否为运行时用默认值创建的实例（需要由使用者销毁；工程资源绝不能 Destroy）。</summary>
+        public bool IsRuntimeInstance { get; private set; }
+
         public static GameConfig Load()
         {
             var cfg = Resources.Load<GameConfig>(ResourcePath);
@@ -195,6 +208,7 @@ namespace PlaneWar
             {
                 cfg = CreateInstance<GameConfig>();
                 cfg.name = "PlaneWarConfig(Default)";
+                cfg.IsRuntimeInstance = true;
             }
             cfg.Validate();
             return cfg;
@@ -211,6 +225,15 @@ namespace PlaneWar
             maxBombs = Mathf.Max(0, maxBombs);
             playerLives = Mathf.Max(1, playerLives);
             maxAspect = Mathf.Clamp(maxAspect, 0.3f, 3f);
+            maxActiveBullets = Mathf.Clamp(maxActiveBullets, 8, 1000);
+            maxActiveExplosions = Mathf.Clamp(maxActiveExplosions, 1, 200);
+            fireInterval = Mathf.Max(0.02f, fireInterval);
+            for (int i = 0; i < 3; i++)
+            {
+                var ec = GetEnemy((EnemyKind)i);
+                ec.spawnInterval = Mathf.Max(0.05f, ec.spawnInterval);
+                ec.maxAlive = Mathf.Clamp(ec.maxAlive, 0, 100);
+            }
         }
 
         private void OnValidate() { Validate(); }

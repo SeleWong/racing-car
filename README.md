@@ -145,6 +145,23 @@ static class DouyinEntry
 
 ---
 
+## 性能与内存（GC / 泄漏 / 卡顿）
+
+| 方面 | 做法 |
+| --- | --- |
+| 局内零 GC 分配 | 子弹 / 敌机 / 补给 / 爆炸全部对象池化并在开局前预热；无 LINQ、无 `foreach` 装箱、无运行时字符串拼接（名字仅编辑器设置）；HUD 文案预生成缓存；分数一帧最多刷新一次 |
+| 主动 GC 时机 | 启动资源生成后、进入结算 / 主界面时调用 `GC.Collect()`，把回收放在玩家看不到卡顿的时刻；推荐开启**增量 GC**（菜单 *PlaneWar → 应用性能推荐设置*） |
+| 原生内存泄漏 | 运行时创建的纹理、Sprite、AudioClip、默认配置都登记在案，`GameManager` 销毁时统一 `Destroy`；所有静态事件在 `OnDestroy` 中退订，Domain Reload 关闭时自动清空 |
+| 内存上限 | 对象池有最大空闲数，同屏子弹 / 爆炸有上限（`maxActiveBullets` / `maxActiveExplosions`），敌机有 `maxAlive`；配置值在 `Validate()` 中做了安全钳制；系统内存告警（`Application.lowMemory`）时收缩对象池并回收 |
+| Draw Call | 程序生成的全部图片（含 UI）打进**一张运行时图集**，SpriteRenderer 与 UI 可合批；背景单独一张可平铺纹理 |
+| UI 重建 | 频繁变化的 HUD 文本放在独立子 Canvas；淡入淡出用 `CanvasRenderer.SetAlpha`，不重建网格；启动时**预热动态字体**，避免首次出现新字符时字体纹理重建导致掉帧 |
+| 启动耗时 | 多边形光栅化改为扫描线算法（结果与逐像素测试逐像素一致），生成耗时降低一个数量级以上；纹理上传后释放 CPU 端副本 |
+| 帧率 / 流畅度 | 原生端 `targetFrameRate=60`；浏览器 WebGL 交给 `requestAnimationFrame`（-1）；单帧 dt 上限 50ms 防止卡顿后穿模；Android 开启帧节奏优化 |
+| 音频 | 射击音效单声部重播并限制最小间隔（`shootSfxMinInterval`）；同一音效 50ms 内不叠加；替换正式音效时短音效建议 *Decompress On Load*，BGM 建议 *Streaming* |
+| 后台 | 切后台 / 失焦 / 微信 `onHide` 自动暂停 |
+
+**验证方法**：配置里打开 `showPerfStats` 或游戏中按 **F1**，显示 FPS、最差帧耗时、托管堆、GC 次数、池对象和实体数量。正常游玩时 **GC 次数只应在结算 / 主界面时增加**，托管堆与池对象数量应保持平稳；如需精确定位，用 Unity Profiler 的 *GC Alloc* 列检查局内每帧分配是否为 0。
+
 ## 替换正式美术 / 音效
 
 菜单 **PlaneWar → 创建配置文件** 生成 `Assets/PlaneWar/Resources/PlaneWarConfig.asset`，在 Inspector 中：

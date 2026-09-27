@@ -24,6 +24,9 @@ namespace PlaneWar
         }
 
         private const float HitFlashTime = 0.08f;
+#if UNITY_EDITOR
+        private static readonly string[] EditorNames = { "Enemy_Small", "Enemy_Medium", "Enemy_Large" };
+#endif
 
         private SpriteRenderer _sr;
         private EnemyTypeConfig _cfg;
@@ -31,6 +34,7 @@ namespace PlaneWar
         private float _speed;
         private float _hitTimer;
         private float _dieTimer;
+        private Vector3 _deathPos;
 
         public static Enemy Create()
         {
@@ -57,7 +61,9 @@ namespace PlaneWar
             _sr.sortingOrder = 10 - (int)cfg.kind;
             transform.position = new Vector3(pos.x, pos.y, 0f);
             transform.localScale = Vector3.one;
-            gameObject.name = "Enemy_" + cfg.kind;
+#if UNITY_EDITOR
+            gameObject.name = EditorNames[(int)cfg.kind]; // 仅编辑器显示，避免运行时字符串分配
+#endif
         }
 
         /// <returns>false = 需要回收（飞出屏幕或爆炸动画结束）</returns>
@@ -69,9 +75,9 @@ namespace PlaneWar
                 float t = Mathf.Clamp01(_dieTimer / Mathf.Max(0.01f, _cfg.dieDuration));
                 _sr.color = new Color(1f, 1f, 1f, 1f - t);
                 // 爆炸时略微抖动（原版的破碎帧效果）
-                float shake = (1f - t) * 0.06f * _cfg.size.x;
+                float shake = (1f - t) * 0.012f * _cfg.size.x;
                 transform.localScale = Vector3.one * (1f + t * 0.1f);
-                transform.position += new Vector3(Random.Range(-shake, shake), Random.Range(-shake, shake), 0f) * 0.2f;
+                transform.position = _deathPos + new Vector3(Mathf.Sin(_dieTimer * 90f) * shake, Mathf.Cos(_dieTimer * 70f) * shake, 0f);
                 return _dieTimer < _cfg.dieDuration;
             }
 
@@ -112,6 +118,8 @@ namespace PlaneWar
             if (IsDying) return;
             IsDying = true;
             _dieTimer = 0f;
+            _deathPos = transform.position;
+            _hitTimer = 0f;
             _sr.sprite = _normal;
         }
     }

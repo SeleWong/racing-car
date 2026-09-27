@@ -35,10 +35,12 @@ namespace PlaneWar
         {
             Config = cfg;
             Sprites = sprites;
-            _bulletPool = new ObjectPool<Bullet>(Bullet.Create, CreateRoot("Bullets"), 40);
-            _enemyPool = new ObjectPool<Enemy>(Enemy.Create, CreateRoot("Enemies"), 20);
-            _supplyPool = new ObjectPool<Supply>(Supply.Create, CreateRoot("Supplies"), 2);
-            _explosionPool = new ObjectPool<Explosion>(Explosion.Create, CreateRoot("Explosions"), 10);
+            // 预热：开局前一次性创建常用数量，局内不再 Instantiate（避免首波敌机出现时卡顿）
+            int maxEnemies = cfg.small.maxAlive + cfg.medium.maxAlive + cfg.large.maxAlive;
+            _bulletPool = new ObjectPool<Bullet>(Bullet.Create, CreateRoot("Bullets"), 32, cfg.maxActiveBullets);
+            _enemyPool = new ObjectPool<Enemy>(Enemy.Create, CreateRoot("Enemies"), Mathf.Min(maxEnemies, 24), Mathf.Max(8, maxEnemies));
+            _supplyPool = new ObjectPool<Supply>(Supply.Create, CreateRoot("Supplies"), 2, 4);
+            _explosionPool = new ObjectPool<Explosion>(Explosion.Create, CreateRoot("Explosions"), 12, cfg.maxActiveExplosions);
 
             var playerGo = new GameObject("Player");
             playerGo.transform.SetParent(transform, false);
@@ -55,8 +57,10 @@ namespace PlaneWar
 
         // ------------------------------------------------------------------ 生成
 
+        /// <returns>达到同屏上限时返回 null</returns>
         public Bullet SpawnBullet(Vector2 pos, bool isDouble)
         {
+            if (Bullets.Count >= Config.maxActiveBullets) return null;
             var b = _bulletPool.Get();
             b.Setup(isDouble ? Sprites.DoubleBullet : Sprites.Bullet, pos, Config.bulletSpeed, Config.bulletSize, Config.bulletDamage);
             Bullets.Add(b);
@@ -83,6 +87,7 @@ namespace PlaneWar
 
         public void SpawnExplosion(Vector2 pos, float size, float duration)
         {
+            if (Explosions.Count >= Config.maxActiveExplosions) return; // 纯表现，超限直接跳过
             var e = _explosionPool.Get();
             e.Play(Sprites.Explosion, pos, size, duration);
             Explosions.Add(e);
@@ -208,6 +213,37 @@ namespace PlaneWar
             for (int i = Supplies.Count - 1; i >= 0; i--) ReleaseSupplyAt(i);
             for (int i = Explosions.Count - 1; i >= 0; i--) _explosionPool.Release(Explosions[i]);
             Explosions.Clear();
+        }
+
+        /// <summary>销毁时释放所有池化对象。</summary>
+        private void OnDestroy()
+        {
+            OnEnemyDestroyed = null;
+            OnSupplyCollected = null;
+            OnPlayerCollided = null;
+            if (_bulletPool == null) return;
+            ClearAll();
+            _bulletPool.Clear();
+            _enemyPool.Clear();
+            _supplyPool.Clear();
+            _explosionPool.Clear();
+        }
+
+        /// <summary>内存告警时收缩对象池（仅销毁空闲对象）。</summary>
+        public void TrimPools()
+        {
+            if (_bulletPool == null) return;
+            _bulletPool.Clear();
+            _explosionPool.Clear();
+        }
+
+        public int PooledObjectCount
+        {
+            get
+            {
+                if (_bulletPool == null) return 0;
+                return _bulletPool.CountAll + _enemyPool.CountAll + _supplyPool.CountAll + _explosionPool.CountAll;
+            }
         }
 
         // 交换删除，O(1)

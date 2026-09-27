@@ -54,6 +54,11 @@ namespace PlaneWar
         private ScrollingBackground _background;
         private float _dyingTimer;
         private bool _waitingForAd;
+        private float _adRequestTime;
+        private bool _ownsConfig;
+        private PerfOverlay _perf;
+
+        private const float AdTimeout = 8f;
 
         private const float PlayerDyingDuration = 1.2f;
 
@@ -70,14 +75,22 @@ namespace PlaneWar
 
             if (config == null) config = GameConfig.Load();
             else config.Validate();
-
-            Application.targetFrameRate = config.targetFrameRate;
-            if (Application.isMobilePlatform) QualitySettings.vSyncCount = 0;
-            UnityEngine.Input.multiTouchEnabled = true;
+            _ownsConfig = config.IsRuntimeInstance;
 
             Platform = PlatformServices.Current;
+            Platform.Hidden += OnPlatformHidden;
+
+            Application.targetFrameRate = Platform.PreferredFrameRate(config.targetFrameRate);
+            if (Application.isMobilePlatform) QualitySettings.vSyncCount = 0; // 由 targetFrameRate 控制，省电且稳定
+            UnityEngine.Input.multiTouchEnabled = true;
+            Application.lowMemory += OnLowMemory;
+
             BuildWorld();
             State = GameState.Home;
+
+            // 启动期生成资源产生的临时垃圾（像素缓冲、音频采样）在加载界面期间一次性回收，
+            // 避免在游戏过程中触发 GC 卡顿
+            System.GC.Collect();
         }
 
         private void Start()
@@ -97,7 +110,31 @@ namespace PlaneWar
 
         private void OnDestroy()
         {
+            Application.lowMemory -= OnLowMemory;
+            if (Platform != null) Platform.Hidden -= OnPlatformHidden;
+            if (World != null)
+            {
+                World.OnEnemyDestroyed = null;
+                World.OnSupplyCollected = null;
+                World.OnPlayerCollided = null;
+            }
+            // 释放运行时生成的纹理 / Sprite（原生内存，不会被 GC 回收）
+            if (Sprites != null) Sprites.Dispose();
+            if (_ownsConfig && config != null) Destroy(config);
             if (Instance == this) Instance = null;
+        }
+
+        /// <summary>系统内存告警（iOS / Android）：收缩对象池并回收。</summary>
+        private void OnLowMemory()
+        {
+            if (World != null) World.TrimPools();
+            Resources.UnloadUnusedAssets();
+            System.GC.Collect();
+        }
+
+        private void OnPlatformHidden()
+        {
+            if (State == GameState.Playing) Pause();
         }
 
         private void BuildWorld()
@@ -152,12 +189,17 @@ namespace PlaneWar
             uiGo.transform.SetParent(transform, false);
             UI = uiGo.AddComponent<UIManager>();
             UI.Init(this, cam);
+
+            _perf = uiGo.AddComponent<PerfOverlay>();
+            _perf.Init(this, UI.Factory, UI.SafeRoot, config.showPerfStats);
         }
 
         private void Update()
         {
             float dt = Mathf.Min(Time.deltaTime, 1f / 20f); // 防止卡顿后穿模
             Input.Tick(Bounds.GameCamera, config);
+            if (UnityEngine.Input.GetKeyDown(KeyCode.F1)) _perf.Toggle();
+            if (_waitingForAd && Time.unscaledTime - _adRequestTime > AdTimeout) _waitingForAd = false; // 广告无回调兜底
 
             switch (State)
             {
@@ -272,6 +314,7 @@ namespace PlaneWar
         {
             if (State != GameState.GameOver || !CanRevive || _waitingForAd) return;
             _waitingForAd = true;
+            _adRequestTime = Time.unscaledTime;
             Platform.ShowRewardedAd(config.rewardedAdUnitId, success =>
             {
                 _waitingForAd = false;
@@ -382,7 +425,11 @@ namespace PlaneWar
             if (State == next && !force) return;
             var prev = State;
             State = next;
+            if (next != GameState.GameOver) _waitingForAd = false;
             GameEvents.RaiseStateChanged(prev, next);
+
+            // 在玩家看不到卡顿的时机（结算 / 主界面）主动 GC，降低局内触发 GC 的概率
+            if (next == GameState.GameOver || next == GameState.Home) System.GC.Collect();
         }
     }
 }

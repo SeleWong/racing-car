@@ -20,6 +20,8 @@ namespace PlaneWar
         {
             WX.InitSDK(code =>
             {
+                // 小游戏切后台（来电、下拉通知、切换聊天）时自动暂停
+                WX.OnHide(res => RaiseHidden());
                 if (onReady != null) onReady();
             });
         }
@@ -47,6 +49,7 @@ namespace PlaneWar
             _adCallback = onFinished;
             if (_ad == null || _adUnitId != adUnitId)
             {
+                if (_ad != null) _ad.Destroy(); // 释放旧广告实例及其回调，避免泄漏
                 _adUnitId = adUnitId;
                 _ad = WX.CreateRewardedVideoAd(new WXCreateRewardedVideoAdParam { adUnitId = adUnitId });
                 // 官方建议：res 为 null（低版本基础库）时也视为播放完成

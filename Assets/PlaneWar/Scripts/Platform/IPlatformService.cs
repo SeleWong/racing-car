@@ -13,6 +13,15 @@ namespace PlaneWar
     {
         string Name { get; }
 
+        /// <summary>
+        /// 应用切到后台（小游戏 onHide 等）。部分平台（WebGL / 小游戏）不会触发 Unity 的
+        /// OnApplicationPause，需要平台层主动通知以便自动暂停。
+        /// </summary>
+        event Action Hidden;
+
+        /// <summary>推荐帧率：-1 表示交给平台（浏览器 requestAnimationFrame）。</summary>
+        int PreferredFrameRate(int configured);
+
         /// <summary>SDK 初始化，完成后必须回调 onReady（游戏在回调后才进入主界面）。</summary>
         void Init(Action onReady);
 
